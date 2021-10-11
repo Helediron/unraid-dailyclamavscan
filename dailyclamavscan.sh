@@ -6,10 +6,10 @@
 # Further details: https://hub.docker.com/r/tquinnelly/clamav-alpine
 
 # Edit these parameters:
-# List of Unraid shares to scan under /mnt/user. Check Unraid "Shares" tab. 
+# List of Unraid shares to scan under /mnt/user. Check YOUR Unraid "Shares" tab. 
 # Put a space between each share name.
-FOLDERSDAILY="incoming shared"
-FOLDERSWEEKLY="incoming shared backups readonly"
+FOLDERSDAILY="isos yourshare"
+FOLDERSWEEKLY="isos yourshare bigshare hugeshare"
 # Select which day is weekly scan day (1=mon, 7=sun).
 WEEKLYDAY=2
 
@@ -31,7 +31,7 @@ WEEKLYDAY=2
 # Apply the new container configuration and let the container finish its first run.
 # Switch back to user scripts and run manually the "daily_avscan". This may take very long time.
 
-# If you want to interrupt a scan, stop the ClamAV container and the script stops very soon.
+# If you want to interrupt a scan, stop the ClamAV container and the script stops soon after.
 
 # End of instructions and parameters.
 
@@ -61,8 +61,13 @@ echo Creating scan list: $FOLDERS
 rm $HOSTAPPDATA/clamavtargets.txt 2> /dev/null
 for f in $FOLDERS
 do
+  if [ -d "/mnt/user/$f" ]; then
     echo "/scan/$f" >> $HOSTAPPDATA/clamavtargets.txt
+  else
+    echo "Can't find share: /mnt/user/$f"
+  fi
 done
+echo "Scan targets:"
 cat $HOSTAPPDATA/clamavtargets.txt
 
 echo Starting scanner container
@@ -70,7 +75,7 @@ stat=`docker start $CONTAINER` 2> /tmp/avscancheck.txt
 if [ "$stat" != "$CONTAINER" ]; then
   message=`echo "Failed starting $CONTAINER, ";head -2 /tmp/avscancheck.txt`
   rm /tmp/avscancheck.txt
-  echo $message
+  echo "$message"
   $NOTIFY -e "Antivirus Scan" -s "Antivirus Scan NOT Started" -d "$message" -i "warning"
   exit 1
 fi
