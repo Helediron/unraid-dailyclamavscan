@@ -32,6 +32,12 @@ WEEKLYDAY=2
 # Switch back to user scripts and run manually the "daily_avscan". This may take very long time.
 
 # If you want to interrupt a scan, stop the ClamAV container and the script stops soon after.
+# The script writes these files to /mnt/user/appdata/clamav directory
+# clamavloglast.txt: last scanlog extracted from container logs.
+# clamavmaplog.txt: log how the user script was able to map to user shares.
+# clamavtargets.txt: parameter file for ClamAV. Each line is a directory to be scanned.
+#   The directory is container-internal path. You can make custom scans by editing this file
+#   and running the container manually.
 
 # End of instructions and parameters.
 
@@ -39,9 +45,12 @@ WEEKLYDAY=2
 #Technical parameters
 # name of the container.
 CONTAINER=ClamAV
-# Location of ClamAV application data folder in Unraid host. Note that this matches with
-# "Post parameter" /scan/appdata/clamav, where in-container /scan is mapped to /mnt/user.
+# Location of ClamAV application data folder in Unraid host. 
+# Must match with container parameter "ClamAV Signatures:"
 HOSTAPPDATA=/mnt/user/appdata/clamav
+# Location of scanned directory. 
+# Must match with container parameter "Folder to Scan:"
+HOSTSCANDIR=/mnt/user
 # Notify program
 NOTIFY=/usr/local/emhttp/plugins/dynamix/scripts/notify
 
@@ -59,16 +68,20 @@ day=`date +%u`
 
 echo Creating scan list: $FOLDERS
 rm $HOSTAPPDATA/clamavtargets.txt 2> /dev/null
+rm $HOSTAPPDATA/clamavmaplog.txt 2> /dev/null
+maperrors=0
 for f in $FOLDERS
 do
-  if [ -d "/mnt/user/$f" ]; then
+  if [ -d "$HOSTSCANDIR/$f" ]; then
     echo "/scan/$f" >> $HOSTAPPDATA/clamavtargets.txt
+	echo "Scanning container /scan/$f -> host $HOSTSCANDIR/$f"
+	echo "Scanning container /scan/$f -> host $HOSTSCANDIR/$f" >> $HOSTAPPDATA/clamavmaplog.txt
   else
-    echo "Can't find share: /mnt/user/$f"
+    echo "Warning: can't find share: $HOSTSCANDIR/$f"
+    echo "Warning: can't find share: $HOSTSCANDIR/$f" >> $HOSTAPPDATA/clamavmaplog.txt
+	maperrors=1
   fi
 done
-echo "Scan targets:"
-cat $HOSTAPPDATA/clamavtargets.txt
 
 echo Starting scanner container
 stat=`docker start $CONTAINER` 2> /tmp/avscancheck.txt
@@ -86,12 +99,19 @@ echo Waiting scanner to finish...
 docker wait $CONTAINER
 
 echo Checking scanner logs
-docker logs $CONTAINER 2>/dev/null | grep FOUND > /tmp/avscanlog.txt
-count=`cat /tmp/avscanlog.txt | wc -l`
-infected="No infections found"
+# The awk program extracts last run of the log
+docker logs $CONTAINER 2>/dev/null | awk '/ClamAV process starting/{ buf=$0; c=0; found=1; next }
+  ++c>0 { buf=(buf==""?"":buf ORS) $0 }
+  END{ if(c>=2 && found)print buf }' > $HOSTAPPDATA/clamavloglast.txt
+cat $HOSTAPPDATA/clamavloglast.txt | grep FOUND > /tmp/avscanfound.txt
+count=`cat /tmp/avscanfound.txt | wc -l`
 if [ $count -gt 0 ]; then
-  infected=`echo "Infected files: $count, "; [ $count -gt 10 ] && echo "(First ten) ";head -10 /tmp/avscanlog.txt`
+  infected=`echo "Infected files: $count, "; [ $count -gt 10 ] && echo "(First ten) ";head -10 /tmp/avscanfound.txt`
+  $NOTIFY -e "Antivirus Scan" -s "Antivirus Scan Finished" -d "$infected" -i "warning"
+elif [ $maperrors -gt 0 ]; then
+  $NOTIFY -e "Antivirus Scan" -s "Antivirus Scan Finished" -d "No infections found, unknown shares" -i "warning"
+else
+  $NOTIFY -e "Antivirus Scan" -s "Antivirus Scan Finished" -d "No infections found" -i "normal"
 fi
-rm /tmp/avscanlog.txt
-$NOTIFY -e "Antivirus Scan" -s "Antivirus Scan Finished" -d "$infected" -i "normal"
+rm /tmp/avscanfound.txt
 echo Scan done.
